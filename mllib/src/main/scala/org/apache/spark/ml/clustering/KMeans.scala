@@ -33,8 +33,7 @@ import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.sql.functions.{col, udf}
 import org.apache.spark.sql.types.{IntegerType, StructType}
-import org.apache.spark.util.VersionUtils.majorVersion
-
+import org.apache.spark.storage.StorageLevel
 /**
  * Common params for KMeans and KMeansModel
  */
@@ -233,7 +232,10 @@ object KMeansModel extends MLReadable[KMeansModel] {
       val metadata = DefaultParamsReader.loadMetadata(path, sc, className)
       val dataPath = new Path(path, "data").toString
 
-      val clusterCenters = if (majorVersion(metadata.sparkVersion) >= 2) {
+      val versionRegex = "([0-9]+)\\.(.+)".r
+      val versionRegex(major, _) = metadata.sparkVersion
+
+      val clusterCenters = if (major.toInt >= 2) {
         val data: Dataset[Data] = sparkSession.read.parquet(dataPath).as[Data]
         data.collect().sortBy(_.clusterIdx).map(_.clusterCenter).map(OldVectors.fromML)
       } else {
@@ -304,14 +306,26 @@ class KMeans @Since("1.5.0") (
   @Since("1.5.0")
   def setSeed(value: Long): this.type = set(seed, value)
 
-  @Since("2.0.0")
+   @Since("2.0.0")
   override def fit(dataset: Dataset[_]): KMeansModel = {
+    /*
+      Before fit the dataset, we check storage level of the rdd
+      if rdd is not cached, we cached our RDD
+    */
+    val handlePersistence = dataset.rdd.getStorageLevel == StorageLevel.NONE
+    fit(dataset, handlePersistence)
+  }
+  
+  @Since("2.0.0")
+  protected def fit(dataset: Dataset[_], handlePersistence: Boolean): KMeansModel = {
     transformSchema(dataset.schema, logging = true)
-    val rdd: RDD[OldVector] = dataset.select(col($(featuresCol))).rdd.map {
+    val instances: RDD[OldVector] = dataset.select(col($(featuresCol))).rdd.map {
       case Row(point: Vector) => OldVectors.fromML(point)
     }
-
-    val instr = Instrumentation.create(this, rdd)
+    if (handlePersistence) {
+      instances.persist(StorageLevel.MEMORY_AND_DISK)
+    }
+    val instr = Instrumentation.create(this, instances)
     instr.logParams(featuresCol, predictionCol, k, initMode, initSteps, maxIter, seed, tol)
 
     val algo = new MLlibKMeans()
@@ -321,12 +335,14 @@ class KMeans @Since("1.5.0") (
       .setMaxIterations($(maxIter))
       .setSeed($(seed))
       .setEpsilon($(tol))
-    val parentModel = algo.run(rdd, Option(instr))
+    val parentModel = algo.run(instances, Option(instr))
     val model = copyValues(new KMeansModel(uid, parentModel).setParent(this))
     val summary = new KMeansSummary(
       model.transform(dataset), $(predictionCol), $(featuresCol), $(k))
     model.setSummary(summary)
     instr.logSuccess(model)
+  // after all operations, the rdd must be uncached
+    if (handlePersistence) instances.unpersist()
     model
   }
 
