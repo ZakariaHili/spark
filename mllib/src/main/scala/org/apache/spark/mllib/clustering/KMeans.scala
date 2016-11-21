@@ -305,10 +305,6 @@ class KMeans @Since("1.5.0") (
 
   @Since("2.0.0")
   override def fit(dataset: Dataset[_]): KMeansModel = {
-    /*
-      Before fit the dataset, we check storage level of the rdd
-      if rdd is not cached, we cached our RDD
-    */
     val handlePersistence = dataset.rdd.getStorageLevel == StorageLevel.NONE
     fit(dataset, handlePersistence)
   }
