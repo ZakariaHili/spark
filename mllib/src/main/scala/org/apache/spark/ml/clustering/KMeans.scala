@@ -36,7 +36,7 @@ import org.apache.spark.sql.types.{IntegerType, StructType}
 import org.apache.spark.storage.StorageLevel
 /**
  * Common params for KMeans and KMeansModel
- */
+ */ 
 private[clustering] trait KMeansParams extends Params with HasMaxIter with HasFeaturesCol
   with HasSeed with HasPredictionCol with HasTol {
 
